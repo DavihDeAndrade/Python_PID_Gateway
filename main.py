@@ -1,15 +1,9 @@
 from time import time, sleep
 import requests
-import RPi.GPIO as GPIO
 import serial
-
-# GPIO declaration
-bomba = 5
-
-# GPIO setup (one-time)
-GPIO.setmode(GPIO.BCM)
-GPIO.setwarnings(False)
-GPIO.setup(bomba, GPIO.OUT, initial=1)
+import csv
+from datetime import datetime
+import os
 
 # API endpoints
 url_post = "http://127.0.0.1:2000/post"
@@ -60,13 +54,6 @@ def get():
         if res.status_code == 200:
             data = res.json()
             
-            # Process irrigation command
-            if "irrigacao" in data and data["irrigacao"] > 0:
-                print(f"Valve open time: {data['irrigacao']}s")
-                GPIO.output(bomba, 0)
-                sleep(data["irrigacao"])
-                GPIO.output(bomba, 1)
-            
             # Process setpoint update
             if "setpoint" in data:
                 new_sp = float(data["setpoint"])
@@ -112,6 +99,32 @@ def establish_serial_connection():
             print(f"Retrying in {RETRY_DELAY}s...")
             sleep(RETRY_DELAY)
 
+def log_pid_data_to_csv(upper_percent, pump_percent, current_setpoint, filename="pid_data.csv"):
+
+    # Verifica se o arquivo já existe para decidir se precisa escrever o cabeçalho
+    file_exists = os.path.isfile(filename)
+    
+    try:
+        with open(filename, 'a', newline='') as csvfile:
+            fieldnames = ['timestamp', 'PV', 'CO', 'setpoint']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            
+            # Escreve o cabeçalho apenas se o arquivo for novo
+            if not file_exists:
+                writer.writeheader()
+            
+            # Escreve os dados com timestamp atual
+            writer.writerow({
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'PV': f"{upper_percent:.1f}",
+                'CO': f"{pump_percent:.1f}",
+                'setpoint': f"{current_setpoint:.1f}"
+            })
+            
+    except Exception as e:
+        print(f"Erro ao escrever no arquivo CSV: {e}")
+
+
 if __name__ == '__main__':
     ser = None
     try:
@@ -155,6 +168,8 @@ if __name__ == '__main__':
                 lower_percent = sensor_to_percent(last_lower)
                 pump_percent = ((last_pump - 16.0) / (50.0 - 16.0)) * 100.0 if last_pump > 0 else 0
                 
+                log_pid_data_to_csv(upper_percent, pump_percent, current_setpoint)
+
                 print(f"PV: {upper_percent:.1f}%, "
                       f"CO: {pump_percent:.1f}%, "
                       f"Setpoint: {current_setpoint:.1f}%")
@@ -181,5 +196,4 @@ if __name__ == '__main__':
     finally:
         if ser and ser.is_open:
             ser.close()
-        GPIO.cleanup()
         print("Cleanup complete")
